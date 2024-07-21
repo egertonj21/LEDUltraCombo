@@ -6,22 +6,23 @@
 #include <vector>
 
 #define LED_PIN          8       // Pin where the LED strip is connected
-#define NUM_LEDS         31       // Number of LEDs in your strip
-#define TRIGGER_PIN      10        // Pin for the ultrasonic sensor trigger
-#define ECHO_PIN         9        // Pin for the ultrasonic sensor echo
-#define MAX_DISTANCE     200      // Maximum distance to measure with the ultrasonic sensor
-#define HEARTBEAT_INTERVAL 60000  // Heartbeat interval in milliseconds
-#define ALIVE_INTERVAL   15 * 60 * 1000  // Alive message interval in milliseconds
-#define DISTANCE_INTERVAL 400     // Interval between distance measurements in milliseconds
-#define MIN_DISTANCE     50       // Minimum distance to consider a valid measurement
+#define NUM_LEDS         31      // Number of LEDs in your strip
+#define TRIGGER_PIN      10      // Pin for the ultrasonic sensor trigger
+#define ECHO_PIN         9       // Pin for the ultrasonic sensor echo
+#define MAX_DISTANCE     200     // Maximum distance to measure with the ultrasonic sensor
+#define HEARTBEAT_INTERVAL 60000 // Heartbeat interval in milliseconds
+#define ALIVE_INTERVAL   15 * 60 * 1000 // Alive message interval in milliseconds
+#define DISTANCE_INTERVAL 400    // Interval between distance measurements in milliseconds
+#define MIN_DISTANCE     50      // Minimum distance to consider a valid measurement
 
 const char* mqtt_server = "";
 const int MQTT_PORT = 1883;
-const char* MQTT_TOPIC_TRIGGER = "trigger/ledstrip3";
-const char* MQTT_TOPIC_DISTANCE = "ultrasonic/distance_sensor3";
-const char* ALIVE_TOPIC_LED = "alive/ledstrip3";
-const char* ALIVE_TOPIC_DISTANCE = "alive/distance_sensor3";
+const char* MQTT_TOPIC_TRIGGER = "trigger/ledstrip2";
+const char* MQTT_TOPIC_DISTANCE = "ultrasonic/distance_sensor2";
+const char* ALIVE_TOPIC_LED = "alive/ledstrip2";
+const char* ALIVE_TOPIC_DISTANCE = "alive/distance_sensor2";
 const char* CONTROL_TOPIC = "control/distance_sensor";
+const char* MQTT_TOPIC_ACK = "ack/ledstrip1";  // New topic for acknowledgment
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -38,6 +39,7 @@ struct LedTimer {
   unsigned long endTime;
   int startLED;
   int endLED;
+  uint32_t originalColor;
 };
 
 std::vector<LedTimer> ledTimers;
@@ -48,7 +50,7 @@ void setup() {
   strip.show(); // Initialize all pixels to 'off'
 
   WiFiManager wifiManager;
-  wifiManager.autoConnect("Device3");
+  wifiManager.autoConnect("Device2");
 
   client.setServer(mqtt_server, MQTT_PORT);
   client.setCallback(mqttCallback);
@@ -137,27 +139,25 @@ void processTriggerMessage(String message) {
   uint32_t colorCode = getColorFromRGBString(color);
   int duration = durationStr.toInt() * 1000; // Convert duration from seconds to milliseconds
 
+  // Save the current color of the range
+  uint32_t originalColor = strip.getPixelColor(startLED);
+
   // Set LEDs to the new color
   setLEDs(startLED, endLED + 1, colorCode); // endLED is inclusive
 
   if (duration > 0) {
     unsigned long newEndTime = millis() + duration; // Duration is now in milliseconds
-    bool updated = false;
+    LedTimer newTimer = { newEndTime, startLED, endLED + 1, originalColor };
+    ledTimers.push_back(newTimer);
+  }
 
-    // Check if the timer for this range already exists and update it
-    for (auto& timer : ledTimers) {
-      if (timer.startLED == startLED && timer.endLED == endLED + 1) {
-        timer.endTime = newEndTime;
-        updated = true;
-        break;
-      }
-    }
-
-    // If no existing timer was updated, create a new one
-    if (!updated) {
-      LedTimer newTimer = { newEndTime, startLED, endLED + 1 };
-      ledTimers.push_back(newTimer);
-    }
+  // Publish acknowledgment message
+  char ackMsg[50];
+  snprintf(ackMsg, sizeof(ackMsg), "Trigger processed: %s", message.c_str());
+  if (client.publish(MQTT_TOPIC_ACK, ackMsg)) {
+    Serial.println("Acknowledgment message sent!");
+  } else {
+    Serial.println("Failed to send acknowledgment message!");
   }
 }
 
@@ -193,7 +193,8 @@ void checkTimers() {
   unsigned long currentTime = millis();
   for (auto it = ledTimers.begin(); it != ledTimers.end(); ) {
     if (currentTime > it->endTime) {
-      turnOffLEDs(it->startLED, it->endLED);
+      // Revert to original color
+      setLEDs(it->startLED, it->endLED, it->originalColor);
       it = ledTimers.erase(it); // Remove expired timer
     } else {
       ++it;
