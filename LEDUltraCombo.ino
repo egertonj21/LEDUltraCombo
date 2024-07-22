@@ -15,7 +15,7 @@
 #define DISTANCE_INTERVAL 400    // Interval between distance measurements in milliseconds
 #define MIN_DISTANCE     50      // Minimum distance to consider a valid measurement
 
-const char* mqtt_server = "192.168.0.93";
+const char* mqtt_server = "";
 const int MQTT_PORT = 1883;
 const char* MQTT_TOPIC_TRIGGER = "trigger/ledstrip2";
 const char* MQTT_TOPIC_DISTANCE = "ultrasonic/distance_sensor2";
