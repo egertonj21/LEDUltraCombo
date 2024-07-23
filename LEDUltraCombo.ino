@@ -16,6 +16,7 @@
 #define DISTANCE_INTERVAL 400    // Interval between distance measurements in milliseconds
 #define MIN_DISTANCE     50      // Minimum distance to consider a valid measurement
 #define EEPROM_SIZE      64      // EEPROM size
+#define LED_ON_DURATION  2000    // Duration for LED to stay on (2 secs)
 
 const char* mqtt_server = "";
 const int MQTT_PORT = 1883;
@@ -25,6 +26,7 @@ const char* ALIVE_TOPIC_LED = "alive/ledstrip2";
 const char* ALIVE_TOPIC_DISTANCE = "alive/distance_sensor2";
 const char* CONTROL_TOPIC = "control/distance_sensor2";
 const char* CONFIG_TOPIC = "config/ledstrip2";  // New topic for configuration
+const char* RANGE_CONFIG_TOPIC = "config/range_ledstrip2";  // New topic for range configuration
 const char* MQTT_TOPIC_ACK = "ack/ledstrip2";  // New topic for acknowledgment
 const char* MQTT_TOPIC_LED_ON = "control/led_on2";  // New topic for LED on control
 
@@ -43,6 +45,8 @@ uint32_t onColor = strip.Color(255, 255, 255); // Default to white
 uint32_t closeColor = strip.Color(255, 0, 0); // Default to red
 uint32_t midColor = strip.Color(0, 255, 0);   // Default to green
 uint32_t farColor = strip.Color(0, 0, 255);   // Default to blue
+int closeDistance = 17;
+int midDistance = 32;
 
 // Structure to track timing for specific LED ranges
 struct LedTimer {
@@ -54,7 +58,7 @@ struct LedTimer {
 
 std::vector<LedTimer> ledTimers;
 
-void saveColorsToEEPROM() {
+void saveConfigToEEPROM() {
   EEPROM.write(0, (closeColor >> 16) & 0xFF); // Red component
   EEPROM.write(1, (closeColor >> 8) & 0xFF);  // Green component
   EEPROM.write(2, closeColor & 0xFF);         // Blue component
@@ -67,13 +71,21 @@ void saveColorsToEEPROM() {
   EEPROM.write(7, (farColor >> 8) & 0xFF);
   EEPROM.write(8, farColor & 0xFF);
 
+  EEPROM.write(9, (closeDistance >> 8) & 0xFF); // High byte of closeDistance
+  EEPROM.write(10, closeDistance & 0xFF);       // Low byte of closeDistance
+  EEPROM.write(11, (midDistance >> 8) & 0xFF);  // High byte of midDistance
+  EEPROM.write(12, midDistance & 0xFF);         // Low byte of midDistance
+
   EEPROM.commit();
 }
 
-void loadColorsFromEEPROM() {
+void loadConfigFromEEPROM() {
   closeColor = strip.Color(EEPROM.read(0), EEPROM.read(1), EEPROM.read(2));
   midColor = strip.Color(EEPROM.read(3), EEPROM.read(4), EEPROM.read(5));
   farColor = strip.Color(EEPROM.read(6), EEPROM.read(7), EEPROM.read(8));
+
+  closeDistance = (EEPROM.read(9) << 8) | EEPROM.read(10);
+  midDistance = (EEPROM.read(11) << 8) | EEPROM.read(12);
 }
 
 // Function to parse color from string
@@ -98,20 +110,20 @@ void processConfigMessage(String message) {
 
   if (range == "close") {
     closeColor = colorCode;
-    setLEDs(0, 10, closeColor);
+    Serial.println("Close color updated.");
   } else if (range == "mid") {
     midColor = colorCode;
-    setLEDs(10, 20, midColor);
+    Serial.println("Mid color updated.");
   } else if (range == "far") {
     farColor = colorCode;
-    setLEDs(20, 30, farColor);
+    Serial.println("Far color updated.");
   } else {
     Serial.println("Invalid range in configuration message.");
     return;
   }
 
-  // Save the colors to EEPROM
-  saveColorsToEEPROM();
+  // Save the configuration to EEPROM
+  saveConfigToEEPROM();
 
   // Publish acknowledgment message
   char ackMsg[50];
@@ -123,6 +135,42 @@ void processConfigMessage(String message) {
   }
 }
 
+// Function to process range configuration message
+void processRangeConfigMessage(String message) {
+  int firstCommaIndex = message.indexOf(',');
+  int secondCommaIndex = message.indexOf(',', firstCommaIndex + 1);
+
+  if (firstCommaIndex < 0) {
+    Serial.println("Invalid range configuration message format.");
+    return;
+  }
+
+  int newCloseDistance = message.substring(0, firstCommaIndex).toInt();
+  int newMidDistance = message.substring(firstCommaIndex + 1).toInt();
+
+  if (newCloseDistance < 0 || newMidDistance < 0 || newCloseDistance >= newMidDistance) {
+    Serial.println("Invalid range values.");
+    return;
+  }
+
+  closeDistance = newCloseDistance;
+  midDistance = newMidDistance;
+  Serial.printf("Range updated: close = %d, mid = %d\n", closeDistance, midDistance);
+
+  // Save the ranges to EEPROM
+  saveConfigToEEPROM();
+
+  // Publish acknowledgment message
+  char ackMsg[50];
+  snprintf(ackMsg, sizeof(ackMsg), "Range config processed: %s", message.c_str());
+  if (client.publish(MQTT_TOPIC_ACK, ackMsg)) {
+    Serial.println("Acknowledgment message sent!");
+  } else {
+    Serial.println("Failed to send acknowledgment message!");
+  }
+}
+
+
 void setup() {
   Serial.begin(115200);
 
@@ -130,7 +178,7 @@ void setup() {
   strip.show(); // Initialize all pixels to 'off'
 
   EEPROM.begin(EEPROM_SIZE); // Initialize EEPROM
-  loadColorsFromEEPROM(); // Load saved colors from EEPROM
+  loadConfigFromEEPROM(); // Load saved configuration from EEPROM
 
   WiFiManager wifiManager;
   wifiManager.autoConnect("Device2");
@@ -139,6 +187,10 @@ void setup() {
   client.setCallback(mqttCallback);
 
   reconnect();
+
+  // Send "alive" message on power-up
+  publishHeartbeat(ALIVE_TOPIC_LED);
+  publishHeartbeat(ALIVE_TOPIC_DISTANCE);
 }
 
 void loop() {
@@ -179,6 +231,7 @@ void reconnect() {
       client.subscribe(CONTROL_TOPIC);
       client.subscribe(MQTT_TOPIC_LED_ON); // Subscribe to the new topic
       client.subscribe(CONFIG_TOPIC); // Subscribe to configuration topic
+      client.subscribe(RANGE_CONFIG_TOPIC); // Subscribe to range configuration topic
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -215,6 +268,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     processLedOnMessage(message); // Process the new LED on control message
   } else if (String(topic) == CONFIG_TOPIC) {
     processConfigMessage(message); // Process configuration message
+  } else if (String(topic) == RANGE_CONFIG_TOPIC) {
+    processRangeConfigMessage(message); // Process range configuration message
   }
 }
 
@@ -341,6 +396,31 @@ void measureAndPublishDistance() {
         lastMessageTime = currentMillis; // Update the last message time
       } else {
         Serial.println("Failed to send distance message to MQTT broker!");
+      }
+
+      // Trigger LEDs based on distance and set timer for 2 seconds
+      uint32_t color = 0;
+      int startLED = 0;
+      int endLED = 0;
+
+      if (distance <= closeDistance) { // Close range
+        color = closeColor;
+        startLED = 0;
+        endLED = 10;
+      } else if (distance > closeDistance && distance <= midDistance) { // Mid range
+        color = midColor;
+        startLED = 10;
+        endLED = 20;
+      } else if (distance > midDistance && distance <= MAX_DISTANCE) { // Far range
+        color = farColor;
+        startLED = 20;
+        endLED = 30;
+      }
+
+      if (startLED != endLED) {
+        setLEDs(startLED, endLED, color);
+        LedTimer newTimer = { millis() + LED_ON_DURATION, startLED, endLED, strip.Color(0, 0, 0) };
+        ledTimers.push_back(newTimer);
       }
     }
   }
