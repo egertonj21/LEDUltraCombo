@@ -26,7 +26,7 @@ const char* ALIVE_TOPIC_LED = "alive/ledstrip2";
 const char* ALIVE_TOPIC_DISTANCE = "alive/distance_sensor2";
 const char* CONTROL_TOPIC = "control/distance_sensor2";
 const char* CONFIG_TOPIC = "config/ledstrip2";  // New topic for configuration
-const char* RANGE_CONFIG_TOPIC = "config/range_ledstrip2";  // New topic for range configuration
+const char* RANGE_CONFIG_TOPIC = "config/range_ledstrip";  // New topic for range configuration
 const char* MQTT_TOPIC_ACK = "ack/ledstrip2";  // New topic for acknowledgment
 const char* MQTT_TOPIC_LED_ON = "control/led_on2";  // New topic for LED on control
 
