@@ -3,6 +3,7 @@
 #include <PubSubClient.h>
 #include <Adafruit_NeoPixel.h>
 #include <NewPing.h>
+#include <EEPROM.h>
 #include <vector>
 
 #define LED_PIN          8       // Pin where the LED strip is connected
@@ -14,6 +15,7 @@
 #define ALIVE_INTERVAL   15 * 60 * 1000 // Alive message interval in milliseconds
 #define DISTANCE_INTERVAL 400    // Interval between distance measurements in milliseconds
 #define MIN_DISTANCE     50      // Minimum distance to consider a valid measurement
+#define EEPROM_SIZE      64      // EEPROM size
 
 const char* mqtt_server = "";
 const int MQTT_PORT = 1883;
@@ -52,6 +54,28 @@ struct LedTimer {
 
 std::vector<LedTimer> ledTimers;
 
+void saveColorsToEEPROM() {
+  EEPROM.write(0, (closeColor >> 16) & 0xFF); // Red component
+  EEPROM.write(1, (closeColor >> 8) & 0xFF);  // Green component
+  EEPROM.write(2, closeColor & 0xFF);         // Blue component
+
+  EEPROM.write(3, (midColor >> 16) & 0xFF);
+  EEPROM.write(4, (midColor >> 8) & 0xFF);
+  EEPROM.write(5, midColor & 0xFF);
+
+  EEPROM.write(6, (farColor >> 16) & 0xFF);
+  EEPROM.write(7, (farColor >> 8) & 0xFF);
+  EEPROM.write(8, farColor & 0xFF);
+
+  EEPROM.commit();
+}
+
+void loadColorsFromEEPROM() {
+  closeColor = strip.Color(EEPROM.read(0), EEPROM.read(1), EEPROM.read(2));
+  midColor = strip.Color(EEPROM.read(3), EEPROM.read(4), EEPROM.read(5));
+  farColor = strip.Color(EEPROM.read(6), EEPROM.read(7), EEPROM.read(8));
+}
+
 // Function to parse color from string
 uint32_t getColorFromRGBString(String rgb) {
   int firstCommaIndex = rgb.indexOf(',');
@@ -83,13 +107,30 @@ void processConfigMessage(String message) {
     setLEDs(20, 30, farColor);
   } else {
     Serial.println("Invalid range in configuration message.");
+    return;
+  }
+
+  // Save the colors to EEPROM
+  saveColorsToEEPROM();
+
+  // Publish acknowledgment message
+  char ackMsg[50];
+  snprintf(ackMsg, sizeof(ackMsg), "Config processed: %s", message.c_str());
+  if (client.publish(MQTT_TOPIC_ACK, ackMsg)) {
+    Serial.println("Acknowledgment message sent!");
+  } else {
+    Serial.println("Failed to send acknowledgment message!");
   }
 }
 
 void setup() {
   Serial.begin(115200);
+
   strip.begin();
   strip.show(); // Initialize all pixels to 'off'
+
+  EEPROM.begin(EEPROM_SIZE); // Initialize EEPROM
+  loadColorsFromEEPROM(); // Load saved colors from EEPROM
 
   WiFiManager wifiManager;
   wifiManager.autoConnect("Device2");
@@ -216,9 +257,11 @@ void processControlMessage(String message) {
   if (message == "sleep") {
     isAwake = false;
     Serial.println("Sensor is going to sleep...");
+    // Optionally, turn off LEDs or perform other actions here
   } else if (message == "wake") {
     isAwake = true;
     Serial.println("Sensor is waking up...");
+    // Optionally, turn on LEDs or perform other actions here
   }
 }
 
